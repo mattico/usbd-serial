@@ -1,25 +1,31 @@
+use crate::cdc_acm::*;
+use bbqueue::{
+    consts::*,
+    framed::{FrameConsumer, FrameProducer},
+    ArrayLength, BBBuffer,
+};
 use core::borrow::BorrowMut;
 use core::mem;
 use core::slice;
 use usb_device::class_prelude::*;
 use usb_device::Result;
-use crate::cdc_acm::*;
-use crate::buffer::{Buffer, DefaultBufferStore};
 
 /// USB (CDC-ACM) serial port with built-in buffering to implement stream-like behavior.
 ///
 /// The RS and WS type arguments specify the storage for the read/write buffers, respectively. By
 /// default an internal 128 byte buffer is used for both directions.
-pub struct SerialPort<'a, B, RS=DefaultBufferStore, WS=DefaultBufferStore>
+pub struct SerialPort<'a, 'b, B, RS, WS>
 where
     B: UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
+    RS: ArrayLength<u8>,
+    WS: ArrayLength<u8>,
 {
     inner: CdcAcmClass<'a, B>,
-    read_buf: Buffer<RS>,
-    write_buf: Buffer<WS>,
     write_state: WriteState,
+    read_reader: FrameConsumer<'b, RS>,
+    read_writer: FrameProducer<'b, RS>,
+    write_reader: FrameConsumer<'b, WS>,
+    write_writer: FrameProducer<'b, WS>,
 }
 
 /// If this many full size packets have been sent in a row, a short packet will be sent so that the
@@ -41,47 +47,47 @@ enum WriteState {
     Full(usize),
 }
 
-impl<B> SerialPort<'_, B>
+impl<'a, 'b, B, RS, WS> SerialPort<'a, 'b, B, RS, WS>
 where
-    B: UsbBus
-{
-    /// Creates a new USB serial port with the provided UsbBus and 128 byte read/write buffers.
-    pub fn new(alloc: &UsbBusAllocator<B>)
-        -> SerialPort<'_, B, DefaultBufferStore, DefaultBufferStore>
-    {
-        SerialPort::new_with_store(
-            alloc,
-            unsafe { mem::uninitialized() },
-            unsafe { mem::uninitialized() })
-    }
-}
-
-impl<B, RS, WS> SerialPort<'_, B, RS, WS>
-where
+    'a: 'b,
     B: UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
+    RS: ArrayLength<u8>,
+    WS: ArrayLength<u8>,
 {
     /// Creates a new USB serial port with the provided UsbBus and buffer backing stores.
-    pub fn new_with_store(alloc: &UsbBusAllocator<B>, read_store: RS, write_store: WS)
-        -> SerialPort<'_, B, RS, WS>
-    {
+    pub fn new_with_store(
+        alloc: &'a UsbBusAllocator<B>,
+    ) -> SerialPort<'a, 'b, B, RS, WS> {
+        let read_buffer: BBBuffer<RS> = BBBuffer::new();
+        let (read_writer, read_reader) = read_buffer.try_split_framed().unwrap();
+        let write_buffer: BBBuffer<WS> = BBBuffer::new();
+        let (write_writer, write_reader) = write_buffer.try_split_framed().unwrap();
         SerialPort {
             inner: CdcAcmClass::new(alloc, 64),
-            read_buf: Buffer::new(read_store),
-            write_buf: Buffer::new(write_store),
             write_state: WriteState::Idle,
+            read_buffer,
+            read_reader,
+            read_writer,
+            write_buffer,
+            write_reader,
+            write_writer,
         }
     }
 
     /// Gets the current line coding.
-    pub fn line_coding(&self) -> &LineCoding { self.inner.line_coding() }
+    pub fn line_coding(&self) -> &LineCoding {
+        self.inner.line_coding()
+    }
 
     /// Gets the DTR (data terminal ready) state
-    pub fn dtr(&self) -> bool { self.inner.dtr() }
+    pub fn dtr(&self) -> bool {
+        self.inner.dtr()
+    }
 
     /// Gets the RTS (request to send) state
-    pub fn rts(&self) -> bool { self.inner.rts() }
+    pub fn rts(&self) -> bool {
+        self.inner.rts()
+    }
 
     /// Writes bytes from `data` into the port and returns the number of bytes written.
     ///
@@ -92,11 +98,15 @@ where
     ///
     /// Other errors from `usb-device` may also be propagated.
     pub fn write(&mut self, data: &[u8]) -> Result<usize> {
+        self.write_
+
         let count = self.write_buf.write(data);
 
         match self.flush() {
-            Ok(_) | Err(UsbError::WouldBlock) => { },
-            Err(err) => { return Err(err); },
+            Ok(_) | Err(UsbError::WouldBlock) => {}
+            Err(err) => {
+                return Err(err);
+            }
         };
 
         if count == 0 {
@@ -200,8 +210,8 @@ where
 impl<B, RS, WS> UsbClass<B> for SerialPort<'_, B, RS, WS>
 where
     B: UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
+    RS: ArrayLength<u8>,
+    WS: ArrayLength<u8>,
 {
     fn get_configuration_descriptors(&self, writer: &mut DescriptorWriter) -> Result<()> {
         self.inner.get_configuration_descriptors(writer)
@@ -220,16 +230,20 @@ where
         }
     }
 
-    fn control_in(&mut self, xfer: ControlIn<B>) { self.inner.control_in(xfer); }
+    fn control_in(&mut self, xfer: ControlIn<B>) {
+        self.inner.control_in(xfer);
+    }
 
-    fn control_out(&mut self, xfer: ControlOut<B>) { self.inner.control_out(xfer); }
+    fn control_out(&mut self, xfer: ControlOut<B>) {
+        self.inner.control_out(xfer);
+    }
 }
 
 impl<B, RS, WS> embedded_hal::serial::Write<u8> for SerialPort<'_, B, RS, WS>
 where
     B: UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
+    RS: ArrayLength<u8>,
+    WS: ArrayLength<u8>,
 {
     type Error = UsbError;
 
@@ -253,8 +267,8 @@ where
 impl<B, RS, WS> embedded_hal::serial::Read<u8> for SerialPort<'_, B, RS, WS>
 where
     B: UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
+    RS: ArrayLength<u8>,
+    WS: ArrayLength<u8>,
 {
     type Error = UsbError;
 
