@@ -67,7 +67,7 @@ where
         -> SerialPort<'_, B, RS, WS>
     {
         SerialPort {
-            inner: CdcAcmClass::new(alloc, 64),
+            inner: CdcAcmClass::new(alloc, 512),
             read_buf: Buffer::new(read_store),
             write_buf: Buffer::new(write_store),
             write_state: WriteState::Idle,
