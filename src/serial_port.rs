@@ -67,7 +67,19 @@ where
         -> SerialPort<'_, B, RS, WS>
     {
         SerialPort {
-            inner: CdcAcmClass::new(alloc, 512),
+            inner: CdcAcmClass::new(alloc, 64),
+            read_buf: Buffer::new(read_store),
+            write_buf: Buffer::new(write_store),
+            write_state: WriteState::Idle,
+        }
+    }
+
+    /// Creates a new USB serial port with the provided UsbBus, buffer backing stores, and max packet size.
+    pub fn new_with(alloc: &UsbBusAllocator<B>, read_store: RS, write_store: WS, max_packet_size: u16)
+        -> SerialPort<'_, B, RS, WS>
+    {
+        SerialPort {
+            inner: CdcAcmClass::new(alloc, max_packet_size),
             read_buf: Buffer::new(read_store),
             write_buf: Buffer::new(write_store),
             write_state: WriteState::Idle,
