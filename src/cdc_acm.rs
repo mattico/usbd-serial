@@ -109,64 +109,70 @@ impl<B: UsbBus> CdcAcmClass<'_, B> {
 
 impl<B: UsbBus> UsbClass<B> for CdcAcmClass<'_, B> {
     fn get_configuration_descriptors(&self, writer: &mut DescriptorWriter) -> Result<()> {
+        defmt::trace!("Writing IAD");
         writer.iad(
             self.comm_if,
             2,
             USB_CLASS_CDC,
             CDC_SUBCLASS_ACM,
-            CDC_PROTOCOL_NONE)?;
-
+            CDC_PROTOCOL_NONE,
+        )?;
+        defmt::trace!("Writing Interface Descriptor");
         writer.interface(
             self.comm_if,
             USB_CLASS_CDC,
             CDC_SUBCLASS_ACM,
-            CDC_PROTOCOL_NONE)?;
-
+            CDC_PROTOCOL_NONE,
+        )?;
+        defmt::trace!("Writing CDC Descriptor");
         writer.write(
             CS_INTERFACE,
             &[
                 CDC_TYPE_HEADER, // bDescriptorSubtype
-                0x10, 0x01 // bcdCDC (1.10)
-            ])?;
-
+                0x10,
+                0x01, // bcdCDC (1.10)
+            ],
+        )?;
+        defmt::trace!("Writing CDC ACM Descriptor");
         writer.write(
             CS_INTERFACE,
             &[
                 CDC_TYPE_ACM, // bDescriptorSubtype
-                0x00 // bmCapabilities
-            ])?;
-
+                0x00,         // bmCapabilities
+            ],
+        )?;
+        defmt::trace!("Writing CDC Union Descriptor");
         writer.write(
             CS_INTERFACE,
             &[
-                CDC_TYPE_UNION, // bDescriptorSubtype
+                CDC_TYPE_UNION,      // bDescriptorSubtype
                 self.comm_if.into(), // bControlInterface
-                self.data_if.into() // bSubordinateInterface
-            ])?;
-
+                self.data_if.into(), // bSubordinateInterface
+            ],
+        )?;
+        defmt::trace!("Writing CDC Type Call Management Descriptor");
         writer.write(
             CS_INTERFACE,
             &[
                 CDC_TYPE_CALL_MANAGEMENT, // bDescriptorSubtype
-                0x00, // bmCapabilities
-                self.data_if.into() // bDataInterface
-            ])?;
-
+                0x00,                     // bmCapabilities
+                self.data_if.into(),      // bDataInterface
+            ],
+        )?;
+        defmt::trace!("Writing Communication Endpoint Descriptor");
         writer.endpoint(&self.comm_ep)?;
-
-        writer.interface(
-            self.data_if,
-            USB_CLASS_CDC_DATA,
-            0x00,
-            0x00)?;
-
+        defmt::trace!("Writing Bulk Data Interface Descriptor");
+        writer.interface(self.data_if, USB_CLASS_CDC_DATA, 0x00, 0x00)?;
+        defmt::trace!("Writing Bulk Write Endpoint Descriptor");
         writer.endpoint(&self.write_ep)?;
+        defmt::trace!("Writing Bulk Read Endpoint Descriptor");
         writer.endpoint(&self.read_ep)?;
 
         Ok(())
     }
 
     fn reset(&mut self) {
+        defmt::trace!("CDC Reset");
         self.line_coding = LineCoding::default();
         self.dtr = false;
         self.rts = false;
@@ -174,11 +180,13 @@ impl<B: UsbBus> UsbClass<B> for CdcAcmClass<'_, B> {
 
     fn control_in(&mut self, xfer: ControlIn<B>) {
         let req = xfer.request();
+        defmt::trace!("CDC Control IN: {:?}", defmt::Debug2Format(&req));
 
         if !(req.request_type == control::RequestType::Class
             && req.recipient == control::Recipient::Interface
             && req.index == u8::from(self.comm_if) as u16)
         {
+            defmt::trace!("CDC Control IN Not matching");
             return;
         }
 
@@ -192,19 +200,24 @@ impl<B: UsbBus> UsbClass<B> for CdcAcmClass<'_, B> {
                     data[6] = self.line_coding.data_bits;
 
                     Ok(7)
-                }).ok();
-            },
-            _ => { xfer.reject().ok(); },
+                })
+                .ok();
+            }
+            _ => {
+                xfer.reject().ok();
+            }
         }
     }
 
     fn control_out(&mut self, xfer: ControlOut<B>) {
         let req = xfer.request();
+        defmt::trace!("CDC Control OUT: {:?}", defmt::Debug2Format(&req));
 
         if !(req.request_type == control::RequestType::Class
             && req.recipient == control::Recipient::Interface
             && req.index == u8::from(self.comm_if) as u16)
         {
+            defmt::trace!("CDC Control OUT Not matching");
             return;
         }
 
@@ -213,7 +226,7 @@ impl<B: UsbBus> UsbClass<B> for CdcAcmClass<'_, B> {
                 // We don't actually support encapsulated commands but pretend we do for standards
                 // compatibility.
                 xfer.accept().ok();
-            },
+            }
             REQ_SET_LINE_CODING if xfer.data().len() >= 7 => {
                 self.line_coding.data_rate =
                     u32::from_le_bytes(xfer.data()[0..4].try_into().unwrap());
@@ -222,15 +235,17 @@ impl<B: UsbBus> UsbClass<B> for CdcAcmClass<'_, B> {
                 self.line_coding.data_bits = xfer.data()[6];
 
                 xfer.accept().ok();
-            },
+            }
             REQ_SET_CONTROL_LINE_STATE => {
                 self.dtr = (req.value & 0x0001) != 0;
                 self.rts = (req.value & 0x0002) != 0;
 
                 xfer.accept().ok();
-            },
-            _ => { xfer.reject().ok(); }
-        };  
+            }
+            _ => {
+                xfer.reject().ok();
+            }
+        };
     }
 }
 
@@ -250,7 +265,7 @@ pub enum StopBits {
 impl From<u8> for StopBits {
     fn from(value: u8) -> Self {
         if value <= 2 {
-            unsafe { mem::transmute(value )}
+            unsafe { mem::transmute(value) }
         } else {
             StopBits::One
         }
@@ -270,7 +285,7 @@ pub enum ParityType {
 impl From<u8> for ParityType {
     fn from(value: u8) -> Self {
         if value <= 4 {
-            unsafe { mem::transmute(value )}
+            unsafe { mem::transmute(value) }
         } else {
             ParityType::None
         }
@@ -290,16 +305,24 @@ pub struct LineCoding {
 
 impl LineCoding {
     /// Gets the number of stop bits for UART communication.
-    pub fn stop_bits(&self) -> StopBits { self.stop_bits }
+    pub fn stop_bits(&self) -> StopBits {
+        self.stop_bits
+    }
 
     /// Gets the number of data bits for UART communication.
-    pub fn data_bits(&self) -> u8 { self.data_bits }
+    pub fn data_bits(&self) -> u8 {
+        self.data_bits
+    }
 
     /// Gets the parity type for UART communication.
-    pub fn parity_type(&self) -> ParityType { self.parity_type }
+    pub fn parity_type(&self) -> ParityType {
+        self.parity_type
+    }
 
     /// Gets the data rate in bits per second for UART communication.
-    pub fn data_rate(&self) -> u32 { self.data_rate }
+    pub fn data_rate(&self) -> u32 {
+        self.data_rate
+    }
 }
 
 impl Default for LineCoding {

@@ -13,3 +13,17 @@ repository = "https://github.com/mvirkkunen/usbd-serial"
 embedded-hal = "0.2.2"
 nb = "0.1.2"
 usb-device = "0.2.7"
+
+[dependencies.defmt]
+git = "https://github.com/knurling-rs/defmt"
+rev = "574f77f"
+
+[features]
+default = ["defmt-debug"]
+defmt-default = []
+defmt-trace = []
+defmt-debug = []
+defmt-info = []
+defmt-warn = []
+defmt-error = []
+
